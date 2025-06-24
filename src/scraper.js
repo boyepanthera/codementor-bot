@@ -47,31 +47,55 @@ class CodementorJobBot {
         timeout: 60000,
       });
 
+      // Take a screenshot for debugging
+      await this.page.screenshot({ path: "debug-login-page.png" });
+
       // Wait for and fill email field
-      await this.page.waitForSelector('input[name="email"]', {
-        timeout: 10000,
-      });
-      await this.page.type('input[name="email"]', this.config.email);
+      await this.page.waitForSelector(
+        'input[name="email"], input[type="email"], #email',
+        { timeout: 10000 }
+      );
+      await this.page.type(
+        'input[name="email"], input[type="email"], #email',
+        this.config.email
+      );
 
       // Fill password field
-      await this.page.waitForSelector('input[name="password"]', {
-        timeout: 10000,
-      });
-      await this.page.type('input[name="password"]', this.config.password);
+      await this.page.waitForSelector(
+        'input[name="password"], input[type="password"], #password',
+        { timeout: 10000 }
+      );
+      await this.page.type(
+        'input[name="password"], input[type="password"], #password',
+        this.config.password
+      );
 
       // Click login button
-      await this.page.click('button[type="submit"]');
+      const loginButton = await this.page.$(
+        'button[type="submit"], .login-btn, [data-testid="login-submit"]'
+      );
+      if (loginButton) {
+        await loginButton.click();
+      } else {
+        // Try pressing Enter on password field
+        await this.page.keyboard.press("Enter");
+      }
 
-      // Wait for successful login (check for dashboard or profile redirect)
+      // Wait for successful login
       await this.page.waitForNavigation({
         waitUntil: "networkidle2",
         timeout: 30000,
       });
 
+      // Take screenshot after login
+      await this.page.screenshot({ path: "debug-after-login.png" });
+
       console.log("Successfully logged in to Codementor");
+      console.log("Current URL:", this.page.url());
       return true;
     } catch (error) {
       console.error("Login failed:", error);
+      await this.page.screenshot({ path: "debug-login-failed.png" });
       throw error;
     }
   }
@@ -87,68 +111,274 @@ class CodementorJobBot {
         timeout: 60000,
       });
 
-      // Wait for job listings to load
-      await this.page.waitForSelector(
-        '[data-testid="request-card"], .request-card, .job-card',
-        {
-          timeout: 15000,
-        }
-      );
+      // Take screenshot for debugging
+      await this.page.screenshot({ path: "debug-job-requests-page.png" });
+      console.log("Current URL after navigation:", this.page.url());
 
-      console.log("Successfully navigated to job requests page");
-      return true;
+      // Log page content for debugging
+      const pageTitle = await this.page.title();
+      console.log("Page title:", pageTitle);
+
+      // Try to find any content on the page
+      const bodyText = await this.page.evaluate(() => {
+        return document.body.innerText.substring(0, 500);
+      });
+      console.log("Page content preview:", bodyText);
+
+      // Try multiple possible selectors with more flexible approach
+      const possibleSelectors = [
+        '[data-testid="request-card"]',
+        ".request-card",
+        ".job-card",
+        '[class*="request"]',
+        '[class*="job"]',
+        '[class*="card"]',
+        ".card",
+        '[data-cy="request-card"]',
+        '[data-test="request-card"]',
+      ];
+
+      let foundSelector = null;
+
+      for (const selector of possibleSelectors) {
+        try {
+          console.log(`Trying selector: ${selector}`);
+          await this.page.waitForSelector(selector, { timeout: 3000 });
+          foundSelector = selector;
+          console.log(`✅ Found elements with selector: ${selector}`);
+          break;
+        } catch (e) {
+          console.log(`❌ Selector ${selector} not found`);
+          continue;
+        }
+      }
+
+      if (!foundSelector) {
+        // If no specific selectors work, try to find any clickable elements
+        console.log("Trying to find any job-related elements...");
+
+        const allElements = await this.page.evaluate(() => {
+          const elements = document.querySelectorAll("*");
+          const jobRelated = [];
+
+          elements.forEach((el) => {
+            const text = el.textContent?.toLowerCase() || "";
+            const className = el.className?.toLowerCase() || "";
+
+            if (
+              text.includes("request") ||
+              text.includes("job") ||
+              className.includes("request") ||
+              className.includes("job") ||
+              className.includes("card")
+            ) {
+              jobRelated.push({
+                tagName: el.tagName,
+                className: el.className,
+                id: el.id,
+                text: text.substring(0, 100),
+              });
+            }
+          });
+
+          return jobRelated.slice(0, 10); // Limit to first 10 matches
+        });
+
+        console.log(
+          "Found job-related elements:",
+          JSON.stringify(allElements, null, 2)
+        );
+
+        // Check if we're on the right page or got redirected
+        if (
+          this.page.url().includes("login") ||
+          this.page.url().includes("signin")
+        ) {
+          throw new Error(
+            "Redirected to login page - authentication may have failed"
+          );
+        }
+
+        throw new Error("No job request elements found on the page");
+      }
+
+      return foundSelector;
     } catch (error) {
       console.error("Failed to navigate to job requests:", error);
+      await this.page.screenshot({ path: "debug-navigation-failed.png" });
       throw error;
     }
   }
 
   async getJobRequests() {
     try {
-      await this.navigateToJobRequests();
+      const selector = await this.navigateToJobRequests();
 
-      // Get all job request cards
-      const jobCards = await this.page.$$eval(
-        '[data-testid="request-card"], .request-card, .job-card',
-        (cards) => {
-          return cards.map((card) => {
-            const titleElement = card.querySelector(
-              'h3, h4, .title, [data-testid="request-title"]'
-            );
-            const descriptionElement = card.querySelector(
-              ".description, .content, p"
-            );
-            const budgetElement = card.querySelector(
-              '.budget, .price, [data-testid="budget"]'
-            );
-            const linkElement = card.querySelector("a");
-            const skillsElement = card.querySelector(
-              ".skills, .tags, .tech-stack"
-            );
+      if (!selector) {
+        console.log(
+          "No valid selector found, attempting alternative approach..."
+        );
+        return this.getJobRequestsAlternative();
+      }
 
-            return {
-              id:
-                card.getAttribute("data-id") ||
-                card.id ||
-                Math.random().toString(36),
-              title: titleElement?.textContent?.trim() || "",
-              description: descriptionElement?.textContent?.trim() || "",
-              budget: budgetElement?.textContent?.trim() || "",
-              url: linkElement?.href || "",
-              skills: skillsElement?.textContent?.trim() || "",
-              element: card,
-            };
-          });
-        }
-      );
+      // Get all job request cards using the found selector
+      const jobCards = await this.page.$$eval(selector, (cards) => {
+        return cards.map((card, index) => {
+          // Try multiple possible sub-selectors for different parts
+          const titleSelectors = [
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            ".title",
+            '[class*="title"]',
+            '[data-testid*="title"]',
+          ];
+          const descriptionSelectors = [
+            ".description",
+            ".content",
+            "p",
+            '[class*="description"]',
+            '[class*="content"]',
+          ];
+          const budgetSelectors = [
+            ".budget",
+            ".price",
+            '[class*="budget"]',
+            '[class*="price"]',
+            '[data-testid*="budget"]',
+          ];
+          const linkSelectors = ["a", "[href]"];
+
+          let title = "";
+          let description = "";
+          let budget = "";
+          let url = "";
+
+          // Find title
+          for (const sel of titleSelectors) {
+            const element = card.querySelector(sel);
+            if (element && element.textContent.trim()) {
+              title = element.textContent.trim();
+              break;
+            }
+          }
+
+          // Find description
+          for (const sel of descriptionSelectors) {
+            const element = card.querySelector(sel);
+            if (
+              element &&
+              element.textContent.trim() &&
+              element.textContent.trim() !== title
+            ) {
+              description = element.textContent.trim();
+              break;
+            }
+          }
+
+          // Find budget
+          for (const sel of budgetSelectors) {
+            const element = card.querySelector(sel);
+            if (element && element.textContent.trim()) {
+              budget = element.textContent.trim();
+              break;
+            }
+          }
+
+          // Find URL
+          for (const sel of linkSelectors) {
+            const element = card.querySelector(sel);
+            if (element && element.href) {
+              url = element.href;
+              break;
+            }
+          }
+
+          // If no title found, use card text content
+          if (!title) {
+            title =
+              card.textContent.trim().substring(0, 100) ||
+              `Job Request ${index + 1}`;
+          }
+
+          return {
+            id:
+              card.getAttribute("data-id") ||
+              card.id ||
+              `job-${index}-${Date.now()}`,
+            title: title,
+            description: description,
+            budget: budget,
+            url: url || window.location.href,
+            skills: card.textContent || "",
+            rawHTML: card.outerHTML.substring(0, 500), // For debugging
+          };
+        });
+      });
 
       console.log(`Found ${jobCards.length} job requests`);
+
+      // Log first job for debugging
+      if (jobCards.length > 0) {
+        console.log("First job sample:", JSON.stringify(jobCards[0], null, 2));
+      }
+
       return jobCards;
     } catch (error) {
       console.error("Error fetching job requests:", error);
       return [];
     }
   }
+
+  async getJobRequestsAlternative() {
+    console.log("Using alternative method to find jobs...");
+
+    try {
+      // Wait a bit longer for dynamic content
+      await this.page.waitForTimeout(5000);
+
+      // Look for any clickable elements that might be jobs
+      const jobs = await this.page.evaluate(() => {
+        const potentialJobs = [];
+        const elements = document.querySelectorAll("div, article, section");
+
+        elements.forEach((el, index) => {
+          const text = el.textContent || "";
+          const hasJobKeywords =
+            text.toLowerCase().includes("help") ||
+            text.toLowerCase().includes("need") ||
+            text.toLowerCase().includes("looking for") ||
+            text.toLowerCase().includes("project") ||
+            text.includes("$");
+
+          if (hasJobKeywords && text.length > 50 && text.length < 1000) {
+            potentialJobs.push({
+              id: `alt-job-${index}`,
+              title: text.substring(0, 100) + "...",
+              description: text.substring(0, 300),
+              budget: text.match(/\$\d+/)?.[0] || "Not specified",
+              url: window.location.href,
+              skills: text,
+            });
+          }
+        });
+
+        return potentialJobs.slice(0, 5); // Limit to 5 potential jobs
+      });
+
+      console.log(
+        `Found ${jobs.length} potential jobs using alternative method`
+      );
+      return jobs;
+    } catch (error) {
+      console.error("Alternative job detection failed:", error);
+      return [];
+    }
+  }
+
+  // ... rest of your existing methods (shouldApplyToJob, applyToJob, etc.)
 
   shouldApplyToJob(job, criteria) {
     // Skip if already applied
@@ -190,125 +420,6 @@ class CodementorJobBot {
     return true;
   }
 
-  async applyToJob(job) {
-    try {
-      console.log(`Applying to job: ${job.title}`);
-
-      // Click on the job to open details or application modal
-      if (job.url) {
-        await this.page.goto(job.url, { waitUntil: "networkidle2" });
-      }
-
-      // Look for apply button
-      const applyButtonSelectors = [
-        'button[data-testid="apply-button"]',
-        'button:contains("Apply")',
-        ".apply-btn",
-        '[data-action="apply"]',
-        'button[type="submit"]',
-      ];
-
-      let applyButton = null;
-      for (const selector of applyButtonSelectors) {
-        try {
-          applyButton = await this.page.$(selector);
-          if (applyButton) break;
-        } catch (e) {
-          continue;
-        }
-      }
-
-      if (!applyButton) {
-        console.log("Apply button not found, trying alternative approach...");
-        // Try clicking on the job card itself
-        await this.page.evaluate((jobId) => {
-          const card = document.querySelector(`[data-id="${jobId}"]`);
-          if (card) card.click();
-        }, job.id);
-
-        await this.page.waitForTimeout(2000);
-
-        // Try finding apply button again
-        for (const selector of applyButtonSelectors) {
-          try {
-            applyButton = await this.page.$(selector);
-            if (applyButton) break;
-          } catch (e) {
-            continue;
-          }
-        }
-      }
-
-      if (applyButton) {
-        await applyButton.click();
-        await this.page.waitForTimeout(1000);
-
-        // Fill cover letter if modal appears
-        await this.fillCoverLetter();
-
-        // Submit application
-        const submitButton = await this.page.$(
-          'button[type="submit"], .submit-btn, [data-testid="submit"]'
-        );
-        if (submitButton) {
-          await submitButton.click();
-          await this.page.waitForTimeout(2000);
-        }
-
-        this.appliedJobs.add(job.id);
-        this.applicationCount++;
-        console.log(`✅ Successfully applied to: ${job.title}`);
-        return true;
-      } else {
-        console.log(`❌ Could not find apply button for: ${job.title}`);
-        return false;
-      }
-    } catch (error) {
-      console.error(`Error applying to job "${job.title}":`, error);
-      return false;
-    }
-  }
-
-  async fillCoverLetter() {
-    try {
-      const coverLetterSelectors = [
-        'textarea[name="cover_letter"]',
-        'textarea[data-testid="cover-letter"]',
-        ".cover-letter textarea",
-        'textarea[placeholder*="cover"]',
-      ];
-
-      for (const selector of coverLetterSelectors) {
-        const textarea = await this.page.$(selector);
-        if (textarea) {
-          const coverLetter = this.generateCoverLetter();
-          await textarea.click();
-          await textarea.type(coverLetter);
-          break;
-        }
-      }
-    } catch (error) {
-      console.error("Error filling cover letter:", error);
-    }
-  }
-
-  generateCoverLetter() {
-    return `Hello,
-
-I'm excited to apply for this opportunity. As a skilled developer with expertise in modern web technologies, I believe I can deliver excellent results for your project.
-
-My experience includes:
-- Full-stack JavaScript development (Node.js, React, Express)
-- Python development and AI/ML implementations
-- Database design and optimization
-- API development and integration
-
-I'm committed to delivering high-quality code and maintaining clear communication throughout the project. I'd love to discuss how I can help bring your vision to life.
-
-Best regards,
-Boye`;
-  }
-
   async monitorJobRequests(options = {}) {
     const {
       checkInterval = 30000,
@@ -343,15 +454,23 @@ Boye`;
         // Get current job requests
         const jobs = await this.getJobRequests();
 
-        // Apply to matching jobs
-        for (const job of jobs) {
-          if (this.applicationCount >= maxApplicationsPerHour) {
-            break;
-          }
+        if (jobs.length === 0) {
+          console.log("No jobs found, will retry in next cycle");
+        } else {
+          console.log(`Processing ${jobs.length} jobs...`);
 
-          if (this.shouldApplyToJob(job, { skillsFilter, minBudget })) {
-            await this.applyToJob(job);
-            await this.page.waitForTimeout(3000); // Rate limiting
+          // Apply to matching jobs
+          for (const job of jobs) {
+            if (this.applicationCount >= maxApplicationsPerHour) {
+              break;
+            }
+
+            if (this.shouldApplyToJob(job, { skillsFilter, minBudget })) {
+              console.log(`Would apply to: ${job.title}`);
+              // Uncomment when ready to actually apply
+              // await this.applyToJob(job);
+              // await this.page.waitForTimeout(3000);
+            }
           }
         }
 
