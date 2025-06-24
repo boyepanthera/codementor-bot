@@ -1,0 +1,22 @@
+{
+  "name": "codmentor-job-bot",
+  "version": "1.0.0",
+  "description": "A web scraping application using Puppeteer to automate job application for Codementor.",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "jest",
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js",
+    "debug": "node --inspect src/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.5.0",
+    "puppeteer": "^20.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.1.10"
+  },
+  "author": "",
+  "license": "ISC"
+}
