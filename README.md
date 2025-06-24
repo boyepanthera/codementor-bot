@@ -24,7 +24,7 @@ An automated web scraping application using Puppeteer to monitor and apply to jo
 1. Clone or download the project:
 
 ```bash
-git clone <repository-url>
+git clone [<repository-url>](https://github.com/boyepanthera/codementor-bot)
 cd codementor-bot
 ```
 
