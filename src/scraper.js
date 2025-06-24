@@ -14,7 +14,7 @@ class CodementorJobBot {
     console.log("Initializing browser...");
     this.browser = await puppeteer.launch({
       headless: this.config.headless || false,
-      slowMo: this.config.slowMo || 0,
+      slowMo: this.config.slowMo || 100,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -28,12 +28,9 @@ class CodementorJobBot {
 
     this.page = await this.browser.newPage();
 
-    // Set user agent
     await this.page.setUserAgent(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     );
-
-    // Set viewport
     await this.page.setViewport({ width: 1280, height: 720 });
 
     console.log("Browser initialized successfully");
@@ -47,10 +44,6 @@ class CodementorJobBot {
         timeout: 60000,
       });
 
-      // Take a screenshot for debugging
-      await this.page.screenshot({ path: "debug-login-page.png" });
-
-      // Wait for and fill email field
       await this.page.waitForSelector(
         'input[name="email"], input[type="email"], #email',
         { timeout: 10000 }
@@ -60,7 +53,6 @@ class CodementorJobBot {
         this.config.email
       );
 
-      // Fill password field
       await this.page.waitForSelector(
         'input[name="password"], input[type="password"], #password',
         { timeout: 10000 }
@@ -70,368 +62,469 @@ class CodementorJobBot {
         this.config.password
       );
 
-      // Click login button
       const loginButton = await this.page.$(
         'button[type="submit"], .login-btn, [data-testid="login-submit"]'
       );
       if (loginButton) {
         await loginButton.click();
       } else {
-        // Try pressing Enter on password field
         await this.page.keyboard.press("Enter");
       }
 
-      // Wait for successful login
       await this.page.waitForNavigation({
         waitUntil: "networkidle2",
         timeout: 30000,
       });
 
-      // Take screenshot after login
-      await this.page.screenshot({ path: "debug-after-login.png" });
-
       console.log("Successfully logged in to Codementor");
-      console.log("Current URL:", this.page.url());
       return true;
     } catch (error) {
       console.error("Login failed:", error);
-      await this.page.screenshot({ path: "debug-login-failed.png" });
-      throw error;
-    }
-  }
-
-  async navigateToJobRequests() {
-    try {
-      console.log("Navigating to job requests page...");
-      const jobRequestsUrl =
-        "https://www.codementor.io/m/dashboard/open-requests?expertise=related";
-
-      await this.page.goto(jobRequestsUrl, {
-        waitUntil: "networkidle2",
-        timeout: 60000,
-      });
-
-      // Take screenshot for debugging
-      await this.page.screenshot({ path: "debug-job-requests-page.png" });
-      console.log("Current URL after navigation:", this.page.url());
-
-      // Log page content for debugging
-      const pageTitle = await this.page.title();
-      console.log("Page title:", pageTitle);
-
-      // Try to find any content on the page
-      const bodyText = await this.page.evaluate(() => {
-        return document.body.innerText.substring(0, 500);
-      });
-      console.log("Page content preview:", bodyText);
-
-      // Try multiple possible selectors with more flexible approach
-      const possibleSelectors = [
-        '[data-testid="request-card"]',
-        ".request-card",
-        ".job-card",
-        '[class*="request"]',
-        '[class*="job"]',
-        '[class*="card"]',
-        ".card",
-        '[data-cy="request-card"]',
-        '[data-test="request-card"]',
-      ];
-
-      let foundSelector = null;
-
-      for (const selector of possibleSelectors) {
-        try {
-          console.log(`Trying selector: ${selector}`);
-          await this.page.waitForSelector(selector, { timeout: 3000 });
-          foundSelector = selector;
-          console.log(`✅ Found elements with selector: ${selector}`);
-          break;
-        } catch (e) {
-          console.log(`❌ Selector ${selector} not found`);
-          continue;
-        }
-      }
-
-      if (!foundSelector) {
-        // If no specific selectors work, try to find any clickable elements
-        console.log("Trying to find any job-related elements...");
-
-        const allElements = await this.page.evaluate(() => {
-          const elements = document.querySelectorAll("*");
-          const jobRelated = [];
-
-          elements.forEach((el) => {
-            const text = el.textContent?.toLowerCase() || "";
-            const className = el.className?.toLowerCase() || "";
-
-            if (
-              text.includes("request") ||
-              text.includes("job") ||
-              className.includes("request") ||
-              className.includes("job") ||
-              className.includes("card")
-            ) {
-              jobRelated.push({
-                tagName: el.tagName,
-                className: el.className,
-                id: el.id,
-                text: text.substring(0, 100),
-              });
-            }
-          });
-
-          return jobRelated.slice(0, 10); // Limit to first 10 matches
-        });
-
-        console.log(
-          "Found job-related elements:",
-          JSON.stringify(allElements, null, 2)
-        );
-
-        // Check if we're on the right page or got redirected
-        if (
-          this.page.url().includes("login") ||
-          this.page.url().includes("signin")
-        ) {
-          throw new Error(
-            "Redirected to login page - authentication may have failed"
-          );
-        }
-
-        throw new Error("No job request elements found on the page");
-      }
-
-      return foundSelector;
-    } catch (error) {
-      console.error("Failed to navigate to job requests:", error);
-      await this.page.screenshot({ path: "debug-navigation-failed.png" });
       throw error;
     }
   }
 
   async getJobRequests() {
     try {
-      const selector = await this.navigateToJobRequests();
+      console.log("Navigating to job requests page...");
+      await this.page.goto(
+        "https://www.codementor.io/m/dashboard/open-requests?expertise=related",
+        {
+          waitUntil: "networkidle2",
+          timeout: 60000,
+        }
+      );
 
-      if (!selector) {
-        console.log(
-          "No valid selector found, attempting alternative approach..."
+      await this.page.waitForTimeout(3000);
+
+      // Look for actual job request links on the listings page
+      const jobLinks = await this.page.evaluate(() => {
+        const links = [];
+
+        // Find all links that contain job request paths
+        const allLinks = document.querySelectorAll(
+          'a[href*="/m/dashboard/open-requests/"]'
         );
-        return this.getJobRequestsAlternative();
-      }
 
-      // Get all job request cards using the found selector
-      const jobCards = await this.page.$$eval(selector, (cards) => {
-        return cards.map((card, index) => {
-          // Try multiple possible sub-selectors for different parts
-          const titleSelectors = [
-            "h1",
-            "h2",
-            "h3",
-            "h4",
-            "h5",
-            ".title",
-            '[class*="title"]',
-            '[data-testid*="title"]',
-          ];
-          const descriptionSelectors = [
-            ".description",
-            ".content",
-            "p",
-            '[class*="description"]',
-            '[class*="content"]',
-          ];
-          const budgetSelectors = [
-            ".budget",
-            ".price",
-            '[class*="budget"]',
-            '[class*="price"]',
-            '[data-testid*="budget"]',
-          ];
-          const linkSelectors = ["a", "[href]"];
+        allLinks.forEach((link, index) => {
+          const href = link.href;
+          const title =
+            link.textContent?.trim() ||
+            link.querySelector(".req-title, h2, h3")?.textContent?.trim() ||
+            `Job ${index + 1}`;
 
-          let title = "";
-          let description = "";
-          let budget = "";
-          let url = "";
-
-          // Find title
-          for (const sel of titleSelectors) {
-            const element = card.querySelector(sel);
-            if (element && element.textContent.trim()) {
-              title = element.textContent.trim();
-              break;
-            }
+          // Only include individual job pages, not the main listings
+          if (
+            href.includes("/m/dashboard/open-requests/") &&
+            href.split("/").pop() !== "open-requests"
+          ) {
+            links.push({
+              url: href,
+              title: title,
+              id: href.split("/").pop() || `job-${index}`,
+            });
           }
-
-          // Find description
-          for (const sel of descriptionSelectors) {
-            const element = card.querySelector(sel);
-            if (
-              element &&
-              element.textContent.trim() &&
-              element.textContent.trim() !== title
-            ) {
-              description = element.textContent.trim();
-              break;
-            }
-          }
-
-          // Find budget
-          for (const sel of budgetSelectors) {
-            const element = card.querySelector(sel);
-            if (element && element.textContent.trim()) {
-              budget = element.textContent.trim();
-              break;
-            }
-          }
-
-          // Find URL
-          for (const sel of linkSelectors) {
-            const element = card.querySelector(sel);
-            if (element && element.href) {
-              url = element.href;
-              break;
-            }
-          }
-
-          // If no title found, use card text content
-          if (!title) {
-            title =
-              card.textContent.trim().substring(0, 100) ||
-              `Job Request ${index + 1}`;
-          }
-
-          return {
-            id:
-              card.getAttribute("data-id") ||
-              card.id ||
-              `job-${index}-${Date.now()}`,
-            title: title,
-            description: description,
-            budget: budget,
-            url: url || window.location.href,
-            skills: card.textContent || "",
-            rawHTML: card.outerHTML.substring(0, 500), // For debugging
-          };
         });
+
+        return links;
       });
 
-      console.log(`Found ${jobCards.length} job requests`);
+      console.log(`Found ${jobLinks.length} job links`);
 
-      // Log first job for debugging
-      if (jobCards.length > 0) {
-        console.log("First job sample:", JSON.stringify(jobCards[0], null, 2));
+      if (jobLinks.length === 0) {
+        // Fallback: look for any job-related elements
+        const fallbackJobs = await this.page.evaluate(() => {
+          const jobs = [];
+          const elements = document.querySelectorAll(
+            'h2, h3, .req-title, [class*="title"]'
+          );
+
+          elements.forEach((el, index) => {
+            const text = el.textContent?.trim();
+            if (
+              text &&
+              text.length > 20 &&
+              (text.toLowerCase().includes("help") ||
+                text.toLowerCase().includes("need") ||
+                text.toLowerCase().includes("developer") ||
+                text.includes("$"))
+            ) {
+              // Try to find a parent link
+              let link = el.closest("a");
+              if (!link) {
+                link = el.parentElement?.querySelector("a");
+              }
+
+              jobs.push({
+                url: link?.href || window.location.href + `#job-${index}`,
+                title: text,
+                id: `fallback-job-${index}`,
+              });
+            }
+          });
+
+          return jobs.slice(0, 5); // Limit to 5 jobs
+        });
+
+        console.log(`Found ${fallbackJobs.length} fallback jobs`);
+        return fallbackJobs;
       }
 
-      return jobCards;
+      return jobLinks;
     } catch (error) {
       console.error("Error fetching job requests:", error);
       return [];
     }
   }
 
-  async getJobRequestsAlternative() {
-    console.log("Using alternative method to find jobs...");
-
-    try {
-      // Wait a bit longer for dynamic content
-      await this.page.waitForTimeout(5000);
-
-      // Look for any clickable elements that might be jobs
-      const jobs = await this.page.evaluate(() => {
-        const potentialJobs = [];
-        const elements = document.querySelectorAll("div, article, section");
-
-        elements.forEach((el, index) => {
-          const text = el.textContent || "";
-          const hasJobKeywords =
-            text.toLowerCase().includes("help") ||
-            text.toLowerCase().includes("need") ||
-            text.toLowerCase().includes("looking for") ||
-            text.toLowerCase().includes("project") ||
-            text.includes("$");
-
-          if (hasJobKeywords && text.length > 50 && text.length < 1000) {
-            potentialJobs.push({
-              id: `alt-job-${index}`,
-              title: text.substring(0, 100) + "...",
-              description: text.substring(0, 300),
-              budget: text.match(/\$\d+/)?.[0] || "Not specified",
-              url: window.location.href,
-              skills: text,
-            });
-          }
-        });
-
-        return potentialJobs.slice(0, 5); // Limit to 5 potential jobs
-      });
-
-      console.log(
-        `Found ${jobs.length} potential jobs using alternative method`
-      );
-      return jobs;
-    } catch (error) {
-      console.error("Alternative job detection failed:", error);
-      return [];
-    }
-  }
-
-  // ... rest of your existing methods (shouldApplyToJob, applyToJob, etc.)
-
   shouldApplyToJob(job, criteria) {
-    // Skip if already applied
     if (this.appliedJobs.has(job.id)) {
       return false;
     }
 
-    // Check skills filter
     if (criteria.skillsFilter && criteria.skillsFilter.length > 0) {
-      const jobText = (
-        job.title +
-        " " +
-        job.description +
-        " " +
-        job.skills
-      ).toLowerCase();
-      const hasMatchingSkill = criteria.skillsFilter.some((skill) =>
-        jobText.includes(skill.toLowerCase())
-      );
+      const jobText = job.title.toLowerCase();
+
+      const skillSynonyms = {
+        javascript: ["js", "javascript", "node", "react", "vue", "angular"],
+        "node.js": ["node", "nodejs", "node.js", "backend", "server"],
+        react: ["react", "reactjs", "react.js", "frontend"],
+        python: ["python", "py", "django", "flask", "fastapi"],
+        ai: [
+          "ai",
+          "artificial intelligence",
+          "machine learning",
+          "ml",
+          "deep learning",
+          "chatbot",
+          "nlp",
+        ],
+        mobile: [
+          "mobile",
+          "ios",
+          "android",
+          "react native",
+          "flutter",
+          "app development",
+        ],
+        html: ["html", "css", "email", "web", "frontend"],
+        css: ["css", "styling", "sass", "scss"],
+      };
+
+      const hasMatchingSkill = criteria.skillsFilter.some((skill) => {
+        const synonyms = skillSynonyms[skill.toLowerCase()] || [
+          skill.toLowerCase(),
+        ];
+        return synonyms.some((synonym) => jobText.includes(synonym));
+      });
 
       if (!hasMatchingSkill) {
-        console.log(`Skipping job "${job.title}" - no matching skills`);
+        console.log(
+          `⏭️  Skipping: "${job.title.substring(
+            0,
+            50
+          )}..." - no matching skills`
+        );
         return false;
       }
     }
 
-    // Check budget filter
-    if (criteria.minBudget) {
-      const budgetMatch = job.budget.match(/\$(\d+)/);
-      if (budgetMatch) {
-        const budgetAmount = parseInt(budgetMatch[1]);
-        if (budgetAmount < criteria.minBudget) {
-          console.log(`Skipping job "${job.title}" - budget too low`);
-          return false;
-        }
-      }
+    console.log(`✅ Job matches criteria: "${job.title.substring(0, 60)}..."`);
+    return true;
+  }
+
+  // ...existing code...
+  generateCoverLetter() {
+    // Generate a short cover letter that's under 300 characters
+    const shortLetters = [
+      "Hi! I'm a skilled developer with expertise in JavaScript, Python, React, and Node.js. I deliver quality solutions with clear communication. I'd love to help with your project and discuss how I can bring value to your team.",
+
+      "Hello! Experienced full-stack developer here. I specialize in JavaScript, Python, mobile apps, and AI/ML. I'm committed to delivering excellent results and maintaining great communication throughout the project.",
+
+      "Hi there! I'm a versatile developer with strong skills in web development, mobile apps, and AI solutions. I focus on quality code and clear communication. I'm excited to contribute to your project's success.",
+
+      "Hello! Professional developer with expertise in React, Node.js, Python, and mobile development. I deliver high-quality solutions on time with excellent communication. Ready to help bring your vision to life!",
+    ];
+
+    // Randomly select one to avoid repetition
+    const selected =
+      shortLetters[Math.floor(Math.random() * shortLetters.length)];
+
+    // Ensure it's under 300 characters
+    if (selected.length > 300) {
+      return selected.substring(0, 297) + "...";
     }
 
-    return true;
+    console.log(`📝 Generated cover letter (${selected.length} characters)`);
+    return selected;
+  }
+
+  async applyToJob(job) {
+    try {
+      console.log(`🎯 APPLYING TO: ${job.title.substring(0, 80)}...`);
+
+      // Navigate to the specific job page
+      await this.page.goto(job.url, {
+        waitUntil: "networkidle2",
+        timeout: 30000,
+      });
+      await this.page.waitForTimeout(2000);
+
+      // Wait for the application form to load
+      await this.page.waitForSelector("form, textarea, .MuiTextField-root", {
+        timeout: 10000,
+      });
+
+      // Generate a short cover letter
+      const coverLetter = this.generateCoverLetter();
+      console.log(
+        `📝 Using cover letter: "${coverLetter.substring(0, 50)}..." (${
+          coverLetter.length
+        } chars)`
+      );
+
+      // Find and type into the textarea (like email/password)
+      const textareaFilled = await this.page.evaluate(() => {
+        // Look for the textarea in the application form
+        const textareas = document.querySelectorAll("textarea");
+
+        for (let textarea of textareas) {
+          const isApplicationTextarea =
+            textarea.placeholder?.toLowerCase().includes("required") ||
+            textarea.closest(".MuiTextField-root") ||
+            textarea.name?.toLowerCase().includes("message") ||
+            textarea.id?.toLowerCase().includes("message") ||
+            textarea.className?.toLowerCase().includes("message") ||
+            textarea.getAttribute("data-testid")?.includes("message") ||
+            textarea.closest("form");
+
+          if (isApplicationTextarea) {
+            // Focus the textarea first
+            textarea.focus();
+            textarea.click();
+
+            // Clear any existing content
+            textarea.value = "";
+            textarea.dispatchEvent(new Event("input", { bubbles: true }));
+
+            console.log("Found and focused textarea for typing");
+            return true;
+          }
+        }
+
+        // Fallback: try the first textarea
+        if (textareas.length > 0) {
+          const firstTextarea = textareas[0];
+          firstTextarea.focus();
+          firstTextarea.click();
+          firstTextarea.value = "";
+          firstTextarea.dispatchEvent(new Event("input", { bubbles: true }));
+          console.log("Using first available textarea as fallback");
+          return true;
+        }
+
+        return false;
+      });
+
+      if (!textareaFilled) {
+        console.log("❌ Could not find textarea to focus");
+        return false;
+      }
+
+      // Now type the cover letter character by character (like email/password)
+      console.log("⌨️  Typing cover letter character by character...");
+
+      // Wait a moment for focus to be established
+      await this.page.waitForTimeout(1000);
+
+      // Type the cover letter using the same method as email/password
+      await this.page.keyboard.type(coverLetter, { delay: 50 }); // 50ms delay between characters
+
+      // Wait for typing to complete
+      await this.page.waitForTimeout(1000);
+
+      // Verify the text was actually entered
+      const textVerified = await this.page.evaluate((expectedLength) => {
+        const textareas = document.querySelectorAll("textarea");
+        for (let textarea of textareas) {
+          if (textarea.value && textarea.value.length >= expectedLength - 10) {
+            // Allow small variance
+            console.log(
+              `✅ Verified textarea has ${textarea.value.length} characters (expected ~${expectedLength})`
+            );
+            return textarea.value.length;
+          }
+        }
+        console.log("❌ No textarea found with expected content length");
+        return 0;
+      }, coverLetter.length);
+
+      if (textVerified === 0) {
+        console.log(
+          "❌ Text verification failed - textarea appears empty after typing"
+        );
+
+        // Debug: show what's in textareas
+        await this.page.evaluate(() => {
+          const textareas = document.querySelectorAll("textarea");
+          textareas.forEach((ta, i) => {
+            console.log(
+              `Textarea ${i}: "${ta.value}" (${ta.value.length} chars)`
+            );
+          });
+        });
+
+        return false;
+      }
+
+      console.log(
+        `✅ Successfully typed ${textVerified} characters into textarea`
+      );
+
+      // Wait a moment for form validation to process
+      await this.page.waitForTimeout(2000);
+
+      // Find and click the submit button
+      const submitClicked = await this.page.evaluate(() => {
+        // Look for submit buttons with various selectors
+        const submitSelectors = [
+          'button[type="submit"]',
+          'input[type="submit"]',
+          'button[class*="submit"]',
+          ".MuiButton-root",
+          "button",
+        ];
+
+        for (let selector of submitSelectors) {
+          const buttons = document.querySelectorAll(selector);
+
+          for (let button of buttons) {
+            const buttonText = button.textContent?.toLowerCase() || "";
+            const isSubmitButton =
+              button.type === "submit" ||
+              buttonText.includes("submit") ||
+              buttonText.includes("apply") ||
+              buttonText.includes("send") ||
+              button.className.toLowerCase().includes("submit");
+
+            if (
+              isSubmitButton &&
+              !button.disabled &&
+              button.offsetParent !== null
+            ) {
+              console.log(`Found submit button: "${buttonText}" (${selector})`);
+              button.click();
+              return true;
+            }
+          }
+        }
+
+        return false;
+      });
+
+      if (submitClicked) {
+        await this.page.waitForTimeout(4000); // Wait for submission to process
+
+        // Check for success indicators or if we're still on the same page
+        const submissionResult = await this.page.evaluate(() => {
+          // Look for success messages
+          const successIndicators = [
+            "success",
+            "submitted",
+            "applied",
+            "thank you",
+            "confirmation",
+          ];
+
+          const pageText = document.body.textContent?.toLowerCase() || "";
+          const hasSuccessMessage = successIndicators.some((indicator) =>
+            pageText.includes(indicator)
+          );
+
+          // Also check if we're no longer on a job application page
+          const currentUrl = window.location.href;
+          const isStillOnJobPage = currentUrl.includes("/open-requests/");
+
+          return {
+            hasSuccessMessage,
+            isStillOnJobPage,
+            currentUrl,
+          };
+        });
+
+        this.appliedJobs.add(job.id);
+        this.applicationCount++;
+
+        console.log(
+          `✅ SUCCESSFULLY APPLIED to: ${job.title.substring(0, 60)}...`
+        );
+        console.log(
+          `📊 Total applications this hour: ${this.applicationCount}`
+        );
+        console.log(
+          `🔗 Result: Success message: ${submissionResult.hasSuccessMessage}, Still on job page: ${submissionResult.isStillOnJobPage}`
+        );
+
+        return true;
+      } else {
+        console.log(
+          `❌ Could not find submit button for: ${job.title.substring(
+            0,
+            60
+          )}...`
+        );
+
+        // Debug: log available buttons and their states
+        await this.page.evaluate(() => {
+          const buttons = document.querySelectorAll(
+            "button, input[type='submit']"
+          );
+          console.log(`Found ${buttons.length} buttons/inputs on page:`);
+          buttons.forEach((btn, i) => {
+            console.log(
+              `Button ${i}: "${btn.textContent?.trim()}" (type: ${
+                btn.type
+              }, disabled: ${btn.disabled}, visible: ${
+                btn.offsetParent !== null
+              })`
+            );
+          });
+
+          // Also check for any validation errors
+          const errorElements = document.querySelectorAll(
+            '.error, .MuiFormHelperText-root, [class*="error"]'
+          );
+          if (errorElements.length > 0) {
+            console.log("Found potential validation errors:");
+            errorElements.forEach((el, i) => {
+              console.log(`Error ${i}: "${el.textContent?.trim()}"`);
+            });
+          }
+        });
+
+        return false;
+      }
+    } catch (error) {
+      console.error(
+        `❌ Error applying to job "${job.title.substring(0, 60)}...":`,
+        error.message
+      );
+      return false;
+    }
   }
 
   async monitorJobRequests(options = {}) {
     const {
-      checkInterval = 30000,
-      maxApplicationsPerHour = 10,
+      checkInterval = 30000, // Reduced to 30 seconds for faster scanning
+      maxApplicationsPerHour = 50, // Increased from 10 to 50
       skillsFilter = [],
       minBudget = 0,
     } = options;
 
-    console.log("Starting job monitoring...");
-    console.log(`Check interval: ${checkInterval / 1000}s`);
-    console.log(`Max applications per hour: ${maxApplicationsPerHour}`);
-    console.log(`Skills filter: ${skillsFilter.join(", ")}`);
+    console.log("🚀 Starting job monitoring...");
+    console.log(`⏱️  Check interval: ${checkInterval / 1000}s`);
+    console.log(`📊 Max applications per hour: ${maxApplicationsPerHour}`);
+    console.log(`🎯 Skills filter: ${skillsFilter.join(", ")}`);
 
     while (true) {
       try {
@@ -439,49 +532,53 @@ class CodementorJobBot {
         if (Date.now() - this.lastHourReset > 3600000) {
           this.applicationCount = 0;
           this.lastHourReset = Date.now();
-          console.log("Application count reset for new hour");
+          console.log("🔄 Application count reset for new hour");
         }
 
-        // Check if we've reached the hourly limit
         if (this.applicationCount >= maxApplicationsPerHour) {
           console.log(
-            `Reached hourly application limit (${maxApplicationsPerHour}). Waiting...`
+            `⏸️  Reached hourly application limit (${maxApplicationsPerHour}). Waiting...`
           );
           await this.page.waitForTimeout(checkInterval);
           continue;
         }
 
-        // Get current job requests
+        console.log("🔍 Scanning for job opportunities...");
         const jobs = await this.getJobRequests();
 
         if (jobs.length === 0) {
-          console.log("No jobs found, will retry in next cycle");
+          console.log("😴 No jobs found, will retry in next cycle");
         } else {
-          console.log(`Processing ${jobs.length} jobs...`);
+          console.log(`📋 Processing ${jobs.length} jobs...`);
 
-          // Apply to matching jobs
           for (const job of jobs) {
             if (this.applicationCount >= maxApplicationsPerHour) {
+              console.log(
+                "⏸️  Hourly limit reached, stopping applications for this cycle"
+              );
               break;
             }
 
             if (this.shouldApplyToJob(job, { skillsFilter, minBudget })) {
-              console.log(`Would apply to: ${job.title}`);
-              // Uncomment when ready to actually apply
-              // await this.applyToJob(job);
-              // await this.page.waitForTimeout(3000);
+              const success = await this.applyToJob(job);
+              if (success) {
+                // Reduced wait time between applications for higher throughput
+                await this.page.waitForTimeout(3000); // Reduced from 8000 to 3000ms
+              }
             }
           }
         }
 
         console.log(
-          `Applications sent this hour: ${this.applicationCount}/${maxApplicationsPerHour}`
+          `📈 Applications sent this hour: ${this.applicationCount}/${maxApplicationsPerHour}`
+        );
+        console.log(
+          `⏳ Waiting ${checkInterval / 1000}s before next scan...\n`
         );
 
-        // Wait before next check
         await this.page.waitForTimeout(checkInterval);
       } catch (error) {
-        console.error("Error in monitoring loop:", error);
+        console.error("💥 Error in monitoring loop:", error);
         await this.page.waitForTimeout(checkInterval);
       }
     }
@@ -490,7 +587,7 @@ class CodementorJobBot {
   async cleanup() {
     if (this.browser) {
       await this.browser.close();
-      console.log("Browser closed");
+      console.log("🔒 Browser closed");
     }
   }
 }

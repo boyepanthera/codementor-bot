@@ -17,9 +17,20 @@ require("dotenv").config();
     // Start monitoring for new job requests
     await bot.monitorJobRequests({
       checkInterval: 30000, // Check every 30 seconds
-      maxApplicationsPerHour: 10,
-      skillsFilter: ["javascript", "node.js", "react", "python", "ai"],
-      minBudget: 50,
+      maxApplicationsPerHour: 50, // Apply to up to 50 jobs per hour
+      skillsFilter: [
+        "javascript",
+        "airtable",
+        "aws",
+        "node.js",
+        "react",
+        "python",
+        "ai",
+        "mobile",
+        "html",
+        "css",
+      ],
+      minBudget: 0,
     });
   } catch (error) {
     console.error("Error running bot:", error);
